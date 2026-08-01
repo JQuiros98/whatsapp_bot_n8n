@@ -63,17 +63,32 @@ function listPayload(to, bodyText, buttonLabel, sections) {
     interactive: { type: "list", body: { text: bodyText }, action: { button: buttonLabel, sections } }
   };
 }
+function locationPayload(to, latitude, longitude, name, address) {
+  return {
+    messaging_product: "whatsapp", to, type: "location",
+    location: { latitude, longitude, name, address }
+  };
+}
 function summaryPayload(to, state) {
   const product = findProduct(state.productId);
   const total = product.price * state.quantity;
   const deliveryLine = state.deliveryMethod === "domicilio"
     ? `Entrega a domicilio: ${state.address}`
     : "Entrega: recoger en tienda";
+  const paymentLine = state.paymentMethod === "sinpe"
+    ? "Pago: Sinpe Móvil"
+    : `Pago: Efectivo (cancela con ${formatPrice(state.cashAmount)})`;
   const summary = `*Resumen de tu pedido*\n\nProducto: ${product.title}\nCantidad: ${state.quantity}\n` +
-    `Precio unitario: ${formatPrice(product.price)}\nTotal: ${formatPrice(total)}\n${deliveryLine}\n\n¿Confirmas el pedido?`;
+    `Precio unitario: ${formatPrice(product.price)}\nTotal: ${formatPrice(total)}\n${deliveryLine}\n${paymentLine}\n\n¿Confirmas el pedido?`;
   return buttonsPayload(to, summary, [
     { id: "confirmar_pedido", title: "Confirmar" },
     { id: "cancelar_pedido", title: "Cancelar" }
+  ]);
+}
+function paymentMethodPayload(to) {
+  return buttonsPayload(to, "¿Cómo prefieres pagar?", [
+    { id: "pago_sinpe", title: "Sinpe Móvil" },
+    { id: "pago_efectivo", title: "Efectivo" }
   ]);
 }
 
@@ -103,7 +118,7 @@ if (message.type === "text" && ["hola", "menu", "inicio"].includes(rawText)) {
   staticData.conversations[from] = { step: "MENU" };
   const payload = buttonsPayload(from, "👋 ¡Hola! Soy tu asistente virtual de compra. ¿En qué puedo ayudarte?", [
     { id: "ver_catalogo", title: "Ver catálogo" },
-    { id: "hablar_asesor", title: "Dirección tienda física" }
+    { id: "visitar_tienda", title: "Visitar tienda" }
   ]);
   return [{ json: { url: buildUrl(), body: payload } }];
 }
@@ -121,17 +136,31 @@ if (message.type === "interactive") {
       responsePayload = listPayload(from, "Elige una categoría:", "Ver categorías", [
         { title: "Muebles", rows: categories.map((c) => ({ id: c.id, title: c.title, description: c.description })) }
       ]);
-    } else if (id === "hablar_asesor") {
+    } else if (id === "visitar_tienda") {
       state.step = "DONE";
-      responsePayload = textPayload(from, "Un asesor se pondrá en contacto contigo en breve. ¡Gracias por escribir!");
+      responsePayload = locationPayload(
+        from,
+        9.885280,
+        -84.065698,
+        "Mueblería Mueble Feliz",
+        "San Miguel, Desamparados, frente al Maxi Palí del cruce"
+      );
     } else if (id === "entrega_domicilio") {
       state.deliveryMethod = "domicilio";
       state.step = "ADDRESS";
       responsePayload = textPayload(from, "Perfecto, ¿cuál es la dirección de entrega?");
     } else if (id === "entrega_recoger") {
       state.deliveryMethod = "recoger";
+      state.step = "PAYMENT_METHOD";
+      responsePayload = paymentMethodPayload(from);
+    } else if (id === "pago_sinpe") {
+      state.paymentMethod = "sinpe";
       state.step = "SUMMARY";
       responsePayload = summaryPayload(from, state);
+    } else if (id === "pago_efectivo") {
+      state.paymentMethod = "efectivo";
+      state.step = "CASH_AMOUNT";
+      responsePayload = textPayload(from, "¿Con cuánto vas a cancelar? (escribe el monto en colones, ej. 50000)");
     } else if (id === "confirmar_pedido") {
       //Envio mensaje dueño
       const product = findProduct(state.productId);
@@ -139,15 +168,22 @@ if (message.type === "interactive") {
       const deliveryLine = state.deliveryMethod === "domicilio"
         ? `Entrega a domicilio: ${state.address}`
         : "Entrega: recoger en tienda";
+      const paymentLine = state.paymentMethod === "sinpe"
+        ? "Pago: Sinpe Móvil"
+        : `Pago: Efectivo (cancela con ${formatPrice(state.cashAmount)})`;
+      const paymentNote = state.paymentMethod === "sinpe"
+        ? "Recuerda mostrarle el comprobante de pago al repartidor."
+        : `Recuerda tener listo ${formatPrice(state.cashAmount)} en efectivo para el repartidor.`;
 
       const ownerNotification = `*Nuevo pedido confirmado* 🛋️\n\n` +
         `Cliente: ${from}\n` +
         `Producto: ${product.title}\n` +
         `Cantidad: ${state.quantity}\n` +
         `Total: ${formatPrice(total)}\n` +
-        `${deliveryLine}`;
+        `${deliveryLine}\n` +
+        `${paymentLine}`;
 
-      const customerPayload = textPayload(from, "¡Pedido confirmado! Te contactaremos para coordinar el pago. Gracias por tu compra 🛋️");
+      const customerPayload = textPayload(from, `¡Pedido confirmado! Te contactaremos para coordinar la entrega. ${paymentNote} Gracias por tu compra 🛋️`);
       const ownerPayload = textPayload(OWNER_PHONE_NUMBER, ownerNotification);
 
       staticData.conversations[from] = { step: "MENU" };
@@ -195,8 +231,17 @@ if (message.type === "interactive") {
     }
   } else if (state.step === "ADDRESS") {
     state.address = text;
-    state.step = "SUMMARY";
-    responsePayload = summaryPayload(from, state);
+    state.step = "PAYMENT_METHOD";
+    responsePayload = paymentMethodPayload(from);
+  } else if (state.step === "CASH_AMOUNT") {
+    const amount = parseInt(text.replace(/[^0-9]/g, ""), 10);
+    if (!Number.isInteger(amount) || amount <= 0) {
+      responsePayload = textPayload(from, "Por favor escribe un monto válido en colones (ej. 50000).");
+    } else {
+      state.cashAmount = amount;
+      state.step = "SUMMARY";
+      responsePayload = summaryPayload(from, state);
+    }
   } else {
     responsePayload = textPayload(from, "Escribe *menu* para ver las opciones disponibles.");
   }
