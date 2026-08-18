@@ -1,26 +1,27 @@
 //Constantes
-let PHONE_NUMBER_ID = "1226249207242918"; //valor de respaldo, se sobreescribe abajo con el numero real que recibio el mensaje
+let PHONE_NUMBER_ID = "1226249207242918";
 const OWNER_PHONE_NUMBER = "50687551210";
 const GRAPH_VERSION = "v20.0";
+const MENU_IMAGE_MEDIA_ID = "TU_MEDIA_ID_AQUI"; //reemplaza esto con el ID que obtengas al subir la imagen del menu a Meta
 
-//Horario de atencion (hora de Costa Rica, UTC-6). Martes a domingo, lunes cerrado.
-const BUSINESS_HOURS = { openHour: 13, openMinute: 0, closeHour: 21, closeMinute: 0 }; // 1:00 pm a 8:59 pm
+//Horario de atencion
+const BUSINESS_HOURS = { openHour: 8, openMinute: 0, closeHour: 20, closeMinute: 59 };
 const CLOSED_DAYS = [1]; // 0=domingo, 1=lunes, 2=martes, 3=miercoles, 4=jueves, 5=viernes, 6=sabado
 
 function isWithinBusinessHours(message) {
   const timestampSeconds = parseInt(message.timestamp, 10);
-  if (!Number.isInteger(timestampSeconds)) return true; // si no hay timestamp valido, no bloquea por seguridad
-  const crMs = timestampSeconds * 1000 - 6 * 60 * 60 * 1000; // Costa Rica = UTC-6
+  if (!Number.isInteger(timestampSeconds)) return true;
+  const crMs = timestampSeconds * 1000 - 6 * 60 * 60 * 1000; //Zona horaria
   const crDate = new Date(crMs);
   const crDay = crDate.getUTCDay();
-  if (CLOSED_DAYS.includes(crDay)) return false; // cerrado ese dia, sin importar la hora
+  if (CLOSED_DAYS.includes(crDay)) return false; //Dia libre
   const nowMinutes = crDate.getUTCHours() * 60 + crDate.getUTCMinutes();
   const openMinutes = BUSINESS_HOURS.openHour * 60 + BUSINESS_HOURS.openMinute;
   const closeMinutes = BUSINESS_HOURS.closeHour * 60 + BUSINESS_HOURS.closeMinute;
   return nowMinutes >= openMinutes && nowMinutes < closeMinutes;
 }
 
-//Catalogo
+//Catálogo
 const categories = [
   { id: "cat_salas", title: "Muebles de Sala", description: "Reclinables, sillones, mesas de centro" },
   { id: "cat_comedores", title: "Comedores", description: "Mesas y sillas" },
@@ -98,19 +99,15 @@ function locationPayload(to, latitude, longitude, name, address) {
     location: { latitude, longitude, name, address }
   };
 }
-function catalogMessagePayload(to) {
+function imagePayload(to, mediaId, caption) {
   return {
-    messaging_product: "whatsapp", to, type: "interactive",
-    interactive: {
-      type: "catalog_message",
-      body: { text: "Aquí tienes nuestro catálogo con fotos 📷" },
-      action: { name: "catalog_message" }
-    }
+    messaging_product: "whatsapp", to, type: "image",
+    image: { id: mediaId, caption }
   };
 }
 
-//Botón de catálogo que se agrega a los mensajes de botones que tengan espacio (máx 3 botones por mensaje en WhatsApp)
-const CATALOG_BUTTON = { id: "ver_fotos", title: "Ver fotos" };
+//Botón de menú/imagen que se agrega a los mensajes de botones que tengan espacio (máx 3 botones por mensaje en WhatsApp)
+const CATALOG_BUTTON = { id: "ver_fotos", title: "Menú" };
 function withCatalogButton(buttons) {
   return buttons.length < 3 ? [...buttons, CATALOG_BUTTON] : buttons;
 }
@@ -243,8 +240,8 @@ const isFreshConversation = state.step === "MENU" || state.step === "DONE";
 if (message.type === "text" && (isFreshConversation || isResetKeyword)) {
   staticData.conversations[from] = { step: "MENU", cart: [] };
   const payload = buttonsPayload(from, "👋 ¡Hola! Soy el asistente virtual de compra de la Mueblería Mueble Feliz. ¿En qué puedo ayudarte?", withCatalogButton([
-    { id: "ver_catalogo", title: "Ver catálogo" },
-    { id: "visitar_tienda", title: "Visitar tienda" }
+    { id: "ver_catalogo", title: "Hacer pedido" },
+    { id: "visitar_tienda", title: "Ubicación Mueblería" }
   ]));
   return [{ json: { url: buildUrl(), body: payload } }];
 }
@@ -259,7 +256,7 @@ if (message.type === "interactive") {
 
     if (id === "ver_fotos") {
       //No cambia el 'step': el cliente sigue exactamente donde estaba en su pedido
-      responsePayload = catalogMessagePayload(from);
+      responsePayload = imagePayload(from, MENU_IMAGE_MEDIA_ID, "Aquí tienes nuestro menú 📷");
     } else if (id === "ver_catalogo") {
       state.step = "CATEGORY_LIST";
       responsePayload = categoryListPayload(from, "Elige una categoría:");
